@@ -19,6 +19,10 @@ class Func():
             sort_keys=True, 
             indent=4)
 
+class CompilerException(Exception):
+    def __init__(self, m):
+        self.message = m
+
 funcs_declare = {} #(k, v)=(func_name, Func)
 variables = {}
 
@@ -412,47 +416,67 @@ def check_violation(node):
             elif node["op"] in arithOps:
                 node["exptype"] = "lhs" # node["lhs"]["exptype"]
 
+        #Check: <vdecl> may not have void type.
+        #Check: a ref type may not contain a 'ref' or 'void' type.
         if "node" in node:
             if node["type"] == "void":
-                raise Exception("error: <vdecl> type cannot be void")
-            elif "ref void" in node["type"]:
-                raise Exception("error: ref void is not allowed")
-            elif node["type"].count("ref") > 1:
-                raise Exception("error: ref ref <type> is not allowed")
+                raise CompilerException("error: <vdecl> type cannot be void")
+            elif "ref" or "void" in node["type"][3:]:
+                raise CompilerException("error: a ref type may not contain a 'ref' or 'void' type.")
 
             variables[node["var"]] = node["type"]
         
         if "name" in node:
             if node["name"] == "varval":
                 if node["var"] not in variables:
-                    raise Exception("error: variable, {} has not been declared", node["var"])
+                    raise CompilerException("error: variable, {} has not been declared", node["var"])
                 node["exptype"] = variables[node["var"]]
 
+            #Check: all functions must be declared before use
             if node["name"] == "funccall":
                 if node["globid"] not in funcs_declare:
-                    raise Exception("error: functions should be declared before used")
+                    raise CompilerException("error: functions should be declared before used")
                 node["exptype"] = funcs_declare[node["globid"]].return_type
 
+            #Check: a function may not return a ref type.
+            #Check: all programs define the "run" function with the right type.
             elif node["name"] == "func":
                 if node["globid"] == "run":
                     if "run" in funcs_declare:
-                        raise Exception("error: run should only declare once")
+                        raise CompilerException("error: run should only declare once")
                     elif node['ret_type'] != "int":
-                        raise Exception("error: run should only return int type")
+                        raise CompilerException("error: run should only return int type")
                     elif "vdecls" in node:
-                        raise Exception("error: run should take no arguments")
+                        raise CompilerException("error: run should take no arguments")
                 else:
                     if "ref" in node['ret_type']:
-                        raise Exception("error: function cannot return ref type")
+                        raise CompilerException("error: function cannot return ref type")
                 funcs_declare[node["globid"]] = Func(node["globid"], 0, node['ret_type'])
+
         for k, v in node.items():
-            check_violation(v)
+            if v is list or dict:
+                check_violation(v)
+
     elif type(node) is list:
         for v in node:
             check_violation(v)
 
+def check_run():
+    if "run" not in funcs_declare:
+        raise CompilerException("error: run should declare once.")
+
 def parse(input_content):
     parser = yacc.yacc()
     result = parser.parse(input_content)
-    check_violation(result)
-    return yaml.dump(result)
+
+    exitcode=0
+    #Compiler reports a reasonable error message & exit code.
+    try:
+        check_violation(result)
+        check_run()
+    except CompilerException as e:
+        exitcode=1
+
+    if exitcode == 0:
+        return yaml.dump(result)
+    print("exit code: "+str(exitcode))
