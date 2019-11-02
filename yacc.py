@@ -484,6 +484,7 @@ def parse(input_content):
         check_violation(result)
         check_run()
     except CompilerException as e:
+        print(e.message)
         exitcode=1
 
     if exitcode == 0:
