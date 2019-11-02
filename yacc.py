@@ -25,6 +25,7 @@ class CompilerException(Exception):
 
 funcs_declare = {} #(k, v)=(func_name, Func)
 variables = {}
+current_func_prefix = None
 
 precedence = (
      ('left', 'OR'),  
@@ -404,7 +405,6 @@ def p_vdecl(p):
 #     result = parser.parse(content, debug=True)
 #     print(yaml.dump(result))
 
-
 def check_violation(node):
     # print(result)
     if type(node) is dict:
@@ -423,8 +423,10 @@ def check_violation(node):
                 raise CompilerException("error: <vdecl> type cannot be void")
             elif "ref" or "void" in node["type"][3:]:
                 raise CompilerException("error: a ref type may not contain a 'ref' or 'void' type.")
-
-            variables[node["var"]] = node["type"]
+            if current_func_prefix != None:
+                variables[current_func_prefix+" "+node["var"]] = node["type"]
+            else:
+                variables[node["var"]] = node["type"]
         
         if "name" in node:
             if node["name"] == "varval":
@@ -452,10 +454,17 @@ def check_violation(node):
                     if "ref" in node['ret_type']:
                         raise CompilerException("error: function cannot return ref type")
                 funcs_declare[node["globid"]] = Func(node["globid"], 0, node['ret_type'])
+                current_func_prefix = node["ret_type"]+" "+node["globid"]
 
         for k, v in node.items():
             if v is list or dict:
                 check_violation(v)
+
+        if node["name"] == "func":
+            for k, v in variables:
+                if k.startswith(current_func_prefix):
+                    variables.pop(k)
+            current_func_prefix = None
 
     elif type(node) is list:
         for v in node:
