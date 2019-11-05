@@ -420,14 +420,7 @@ def p_vdecl(p):
 def not_same_type(left_type, right_type):
     ltype = left_type.split()[-1]
     rtype = right_type.split()[-1]
-    # return left_type[-len(right_type):] != right_type \
-    #     and right_type[-len(left_type):] != left_type
-    #they are the same type, return false
-    #they are not the same type, return true
-    if can_cast(ltype, rtype) or ltype == rtype:
-        return False
-    else:
-        return True
+    return ltype != rtype
 
 def can_cast(cast_type, exp_type):
     exp_type = exp_type.split()[-1] # get the type if exp_type is ref type
