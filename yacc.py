@@ -2,8 +2,8 @@ import ply.yacc as yacc
 import lexer
 import yaml
 import json, sys
-tokens = lexer.tokens 
 
+tokens = lexer.tokens 
 
 #######
 # Parser
@@ -25,6 +25,10 @@ class CompilerException(Exception):
 funcs_declare = {} 
 variables = {}
 current_func_prefix = None
+
+logicOps = ["eq", "gt", "lt", "and", "or"]
+arithOps = ["add", "sub",  "mul", "div"]
+uOps = ["not", "minus"]
 
 precedence = (
      ('left', 'OR'),  
@@ -181,16 +185,22 @@ def p_exp0(p):
         | binop
         | uop
         | globid LPARENTHESE exps RPARENTHESE
+        | globid LPARENTHESE RPARENTHESE
     '''
     if len(p) == 2:
         p[0] = p[1]
     elif len(p) == 4:
         p[0] = p[2]
-    else:
+    elif p[1]=="(":
         p[0] = {
             "name": "funccall",
             "globid": p[1],
             "params": p[3]
+        }
+    else:
+        p[0] = {
+            "name": "funccall",
+            "globid": p[1],
         }
 
 def p_exp1(p):
@@ -329,11 +339,21 @@ def p_true(p):
     '''
     true : TRUE
     '''
+    p[0] = {
+        "name": "lit",
+        "value": p[1] == "true",
+        "exptype": "bool"
+    }
 
 def p_false(p):
     '''
     false : FALSE
     '''
+    p[0] = {
+        "name": "lit",
+        "value": p[1] == "true",
+        "exptype": "bool"
+    }
 
 def p_globid(p):
     '''
@@ -397,9 +417,17 @@ def p_vdecl(p):
         "var": p[2]
     }
 
-def is_same_type(left_type, right_type):
-    return left_type[-len(right_type):] != right_type \
-        and right_type[-len(left_type):] != left_type
+def not_same_type(left_type, right_type):
+    ltype = left_type.split()[-1]
+    rtype = right_type.split()[-1]
+    # return left_type[-len(right_type):] != right_type \
+    #     and right_type[-len(left_type):] != left_type
+    #they are the same type, return false
+    #they are not the same type, return true
+    if can_cast(ltype, rtype) or ltype == rtype:
+        return False
+    else:
+        return True
 
 def can_cast(cast_type, exp_type):
     exp_type = exp_type.split()[-1] # get the type if exp_type is ref type
@@ -416,39 +444,54 @@ def check_violation(node):
     global funcs_declare
     global current_func_prefix
     global variables
+    global logicOps
+    global arithOps
+    global uOps
 
     if type(node) is list:
         for v in node:
             check_violation(v)
 
     elif type(node) is dict:
-        logicOps = ["eq", "gt", "lt", "and", "or"]
-        arithOps = ["add", "sub",  "mul", "div"]
-        uOps = ["not", "minus"]
-
         #Check: <vdecl> may not have void type.
         #Check: a ref type may not contain a 'ref' or 'void' type.
         if "node" in node:
             if node["type"] == "void":
                 raise CompilerException("error: <vdecl> type cannot be void")
-            elif "ref void" in node["type"][3:]:
-                raise CompilerException("error: a ref type may not contain a 'ref' or 'void' type.")
+            elif "noalias" not in node["type"]:
+                if "ref" in node["type"][3:] or "void" in node["type"][3:]:
+                    raise CompilerException("error: a ref type may not contain a 'ref' or 'void' type.")
+            elif "noalias" in node["type"]:
+                if "ref" in node["type"][11:] or "void" in node["type"][11:]:
+                    raise CompilerException("error: a ref type may not contain a 'ref' or 'void' type.")
             if current_func_prefix != None:
                 variables[current_func_prefix+" "+node["var"]] = node["type"]
             else:
                 variables[node["var"]] = node["type"]
         
         if "name" in node:
+            #store exptype in node
             if node["name"] == "varval":
                 varval_key = current_func_prefix + " " + node["var"]
                 if varval_key not in variables:
-                    raise CompilerException("error: variable, " + node["var"] + " has not been declared")
+                    raise CompilerException("error: variable " + node["var"] + " has not been declared")
                 node["exptype"] = variables[varval_key]
 
+            #Check: ref var initializer must be a variable.
+            elif node["name"] == "vardeclstmt":
+                if "exp" not in node or "vdecl" not in node:
+                    raise CompilerException("error: ref var initializer must be a variable.")
+                elif "name" not in node["exp"]:
+                    raise CompilerException("error: ref var initializer must be a variable.")
+                elif "type" not in node["vdecl"]:
+                    raise CompilerException("error: ref var initializer must be a variable.")
+                elif node["vdecl"]["type"][0:3] == "ref" and node["exp"]["name"] != "varval":
+                    raise CompilerException("error: ref var initializer must be a variable.")
+
             #Check: all functions must be declared before use
-            if node["name"] == "funccall":
+            elif node["name"] == "funccall":
                 if node["globid"] not in funcs_declare:
-                    raise CompilerException("error: variable, " + node["globid"] + " has not been declared")
+                    raise CompilerException("error: function " + node["globid"] + " has not been declared")
                 node["exptype"] = funcs_declare[node["globid"]].return_type
 
             #Check: a function may not return a ref type.
@@ -456,11 +499,11 @@ def check_violation(node):
             elif node["name"] == "func":
                 if node["globid"] == "run":
                     if "run" in funcs_declare:
-                        raise CompilerException("error: run should only declare once")
+                        raise CompilerException("error: run function should only declare once")
                     elif node['ret_type'] != "int":
-                        raise CompilerException("error: run should only return int type")
+                        raise CompilerException("error: run function should only return int type")
                     elif "vdecls" in node:
-                        raise CompilerException("error: run should take no arguments")
+                        raise CompilerException("error: run function should take no arguments")
                 else:
                     if "ref" in node['ret_type']:
                         raise CompilerException("error: function cannot return ref type")
@@ -478,12 +521,12 @@ def check_violation(node):
         #Check: the types on both sides of binops are the same
         if "op" in node:
             if node["op"] in logicOps:
-                if is_same_type(node["lhs"]["exptype"], node["rhs"]["exptype"]):
+                if not_same_type(node["lhs"]["exptype"], node["rhs"]["exptype"]):
                     raise CompilerException("error: the type on two sides do not match")
                 node["exptype"] = "bool"
 
             elif node["op"] in arithOps:
-                if is_same_type(node["lhs"]["exptype"], node["rhs"]["exptype"]):
+                if not_same_type(node["lhs"]["exptype"], node["rhs"]["exptype"]):
                     raise CompilerException("error: the type on two sides do not match")
                 node["exptype"] = node["rhs"]["exptype"]
 
@@ -492,10 +535,13 @@ def check_violation(node):
 
         if "name" in node:
             if node["name"] == "assign":
-                var_key = current_func_prefix + " " + node["var"]
+                if current_func_prefix is not None:
+                    var_key = current_func_prefix + " " + node["var"]
+                else:
+                    var_key = node["var"]
                 if var_key not in variables:
-                    raise CompilerException("error: variable, " + node["var"] + " has not been declared")
-                if is_same_type(variables[var_key], node["exp"]["exptype"]):
+                    raise CompilerException("error: variable " + node["var"] + " has not been declared")
+                if not_same_type(variables[var_key], node["exp"]["exptype"]):
                     raise CompilerException("error: the type on two sides do not match")
             
             elif node["name"] == "caststmt":
@@ -513,7 +559,7 @@ def check_violation(node):
 def check_run():
     global funcs_declare
     if "run" not in funcs_declare:
-        raise CompilerException("error: run should declare once.")
+        raise CompilerException("error: run function should be declared once.")
 
 def parse(input_content):
     parser = yacc.yacc()
@@ -530,4 +576,5 @@ def parse(input_content):
 
     if exitcode == 0:
         return yaml.dump(result)
+
     print("exit code: "+str(exitcode))
